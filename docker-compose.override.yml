@@ -1,0 +1,32 @@
+# Dev overrides (auto-loaded). Uses builder image for uv + editable-style src mount.
+
+services:
+  api:
+    build:
+      target: builder
+    command:
+      [
+        "/app/.venv/bin/uvicorn",
+        "rate_limiter.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
+    volumes:
+      - ./src:/app/src
+    environment:
+      PYTHONPATH: /app/src
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+
+  worker:
+    build:
+      target: builder
+    volumes:
+      - ./src:/app/src
+    environment:
+      PYTHONPATH: /app/src
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development

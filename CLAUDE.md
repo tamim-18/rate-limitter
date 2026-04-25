@@ -1,0 +1,86 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Source of Truth
+
+`src/requirements.md` is the canonical project spec — tech choices, architecture, file layout, build phases, and quality bar. Read it before making non-trivial changes. CLAUDE.md only highlights what is easy to get wrong; the requirements doc is authoritative when they disagree.
+
+## Project Status
+
+The repo is in **Phase P0 → P1** (scaffolding). Most directories under `src/` exist but the Python files are empty. When asked to implement something, check what phase it belongs to (requirements §10) and do not pull work forward from later phases unless asked.
+
+## Common Commands
+
+Package manager is **uv** (not pip/poetry). Lockfile (`uv.lock`) is committed.
+
+```bash
+uv sync                        # install runtime + dev deps
+uv sync --frozen               # exact lockfile install (CI/Docker)
+uv add <pkg>                   # add runtime dep
+uv add --dev <pkg>             # add dev dep
+uv run <cmd>                   # run inside the venv
+```
+
+Day-to-day work goes through the Makefile:
+
+```bash
+make up                        # docker compose up --build -d (full stack)
+make down-v                    # stop + wipe volumes (full reset)
+make logs-api                  # tail api only
+make lint                      # ruff check + ruff format --check
+make fmt                       # auto-format + auto-fix
+make typecheck                 # mypy src/  (strict mode)
+make test                      # spin test services → pytest → teardown
+make test-unit                 # no services needed
+make test-load                 # Locust against localhost:8000
+make migrate                   # alembic upgrade head inside api container
+make migrate-new MSG="desc"    # autogenerate a new migration
+make seed                      # load infra/scripts/seed.sql
+```
+
+Run a single test: `uv run pytest tests/unit/test_token_bucket.py::test_name -xvs`.
+
+## Architecture
+
+Two planes, deliberately separated — keep them separated when adding code:
+
+- **Data / hot path**: `Client → FastAPI middleware → Redis Lua script → ALLOW/DENY`. Postgres is **never** touched on the request path. The middleware reads rules from the Redis cache, executes one Lua script, returns 429 + `X-RateLimit-*` / `Retry-After` headers on deny, or forwards on allow. Side effects (violation logging, alerts) are published to RabbitMQ and handled off-path.
+- **Control plane**: Postgres holds the source of truth (rules, clients, violation audit). The ARQ worker syncs rules Postgres → Redis when they change, drains RabbitMQ events into the violation log, and runs cleanup crons.
+
+### Atomicity rule
+
+Each of the four algorithms runs as a **single Redis Lua script**. Redis is single-threaded and Lua executes atomically, so there are no distributed locks, no Redlock, no CAS loops. If you find yourself reaching for a lock or a multi-step `WATCH`/`MULTI`, you are doing it wrong — push the logic into the Lua script.
+
+### Algorithms (Strategy + Factory)
+
+`algorithms/base.py` defines `BaseAlgorithm.check_rate_limit(key, rule) → Decision`. The four concrete algorithms (token bucket, fixed window, sliding window log, leaky bucket) are interchangeable behind it. `algorithms/__init__.py` exposes an `AlgorithmType` enum and a factory function — the middleware obtains an algorithm via the factory and never instantiates one directly. **Adding a fifth algorithm = one new `.py` + one new `.lua` + one factory entry. Zero changes to middleware, config, or existing algorithms** (OCP). Lua source lives in `src/rate_limiter/lua/` and is loaded once at startup.
+
+### Layering
+
+Routes (`api/`) → Services (`services/`, business logic + repository) → Models (`models/`) → DB (`db/`). Route handlers must not execute raw queries; go through the service layer. Cross-layer shortcuts will be rejected.
+
+### Dependency injection
+
+All connections (Redis, async SQLAlchemy session, RabbitMQ) are provided via FastAPI `Depends()` from `dependencies.py`. No module-level singletons, no global state, no `os.getenv()` outside `config.py`. The app is built by `create_app()` in `main.py` (App Factory) so tests can construct alternate instances.
+
+## Non-negotiable Quality Bar
+
+The requirements doc frames this project as a portfolio piece — code is expected to be exemplary, not just functional.
+
+- **MyPy `strict`**. No `Any` escapes, no untyped defs. Type hints on every signature, return, and variable.
+- **Async-first**. All I/O uses async/await. No blocking calls on the event loop (no sync `requests`, no sync `psycopg`, no `time.sleep`).
+- **structlog** for logging — structured key/value events, never f-string interpolation into the message. JSON in prod, console in dev.
+- **Containers run as non-root** (`app` user). Secrets only in `.env` (gitignored), never in code or images. Production disables `/docs`.
+- Migrations are forward-only and autogenerated from model changes via Alembic.
+- Naming: `snake_case` Python, `kebab-case` Docker services, `UPPER_SNAKE` env vars. Module names describe **what they do**, not the pattern they implement (so `rule_service.py`, not `rule_repository_impl.py`).
+
+## Docker Notes
+
+- One Dockerfile, multi-stage: builder uses `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` with `uv sync --frozen --no-dev`; runtime is `python:3.12-slim-bookworm` and copies only the `.venv`. `api` and `worker` share the image and differ only in the `command:` in compose.
+- `docker-compose.override.yml` is auto-loaded in dev — adds `--reload`, bind mounts `./src`, debug logging, and targets the `builder` stage so `uv` is available inside the container. Do not bake dev concerns into the base compose file.
+- `depends_on` uses `condition: service_healthy`. RabbitMQ takes ~30s to become healthy; do not lower its healthcheck timeout.
+
+## Tech Stack (quick reference)
+
+Python 3.12 · FastAPI + Uvicorn · SQLAlchemy 2.0 async + Alembic · Postgres 16 · Redis 7 (Lua + ARQ broker + rules cache) · RabbitMQ 3 · ARQ · pydantic-settings · structlog · Ruff · MyPy strict · pytest + pytest-asyncio · Locust · Docker Compose · GitHub Actions · AWS (ECS Fargate, ECR, ElastiCache, RDS, Amazon MQ, ALB) · Terraform.
