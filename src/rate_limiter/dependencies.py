@@ -1,4 +1,16 @@
-"""FastAPI dependency providers."""
+"""FastAPI dependency providers.
+
+Connections (engine, session factory, redis client, rabbit connection) are
+created once in the lifespan and stashed on `app.state`. These providers
+read from `app.state` per request — no module-level singletons, no global
+state, fully overridable in tests via `app.dependency_overrides`.
+
+Transaction policy: `get_db` opens a session and auto-rolls back on
+exception, but does NOT auto-commit. Services own transaction boundaries
+explicitly (`await session.commit()`). This keeps reads side-effect-free,
+lets multi-service operations share one transaction, and matches the
+service-layer-owns-data-access rule.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +22,8 @@ from fastapi import Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from rate_limiter.config import Settings, get_settings
+
 
 async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     factory = cast(
@@ -19,7 +33,6 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     async with factory() as session:
         try:
             yield session
-            await session.commit()
         except BaseException:
             await session.rollback()
             raise
@@ -36,3 +49,4 @@ def get_rabbit_connection(request: Request) -> AbstractRobustConnection:
 RedisDep = Annotated[Redis[str], Depends(get_redis)]
 DbSessionDep = Annotated[AsyncSession, Depends(get_db)]
 RabbitDep = Annotated[AbstractRobustConnection, Depends(get_rabbit_connection)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]

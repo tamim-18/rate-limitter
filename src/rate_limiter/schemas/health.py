@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel
+
+ServiceStatus = Literal["ok", "error"]
+OverallStatus = Literal["ok", "degraded"]
 
 
 class ServiceHealth(BaseModel):
     name: str
-    status: str = Field(description='"ok" or "error"')
+    status: ServiceStatus
     detail: str | None = None
 
 
 class HealthResponse(BaseModel):
-    status: str = Field(description='"ok" if all dependencies healthy')
+    status: OverallStatus
     services: list[ServiceHealth]

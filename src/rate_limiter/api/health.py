@@ -3,12 +3,11 @@ from __future__ import annotations
 from typing import cast
 
 import structlog
-from aio_pika.abc import AbstractRobustConnection
 from fastapi import APIRouter, Request, Response
-from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from rate_limiter.dependencies import RabbitDep, RedisDep
 from rate_limiter.schemas.health import HealthResponse, ServiceHealth
 
 router = APIRouter(tags=["health"])
@@ -16,12 +15,21 @@ log = structlog.get_logger(__name__)
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health(request: Request, response: Response) -> HealthResponse:
-    """Ping Redis, Postgres, and RabbitMQ; 503 if any dependency fails."""
+async def health(
+    request: Request,
+    response: Response,
+    redis_client: RedisDep,
+    rabbit: RabbitDep,
+) -> HealthResponse:
+    """Ping Redis, Postgres, and RabbitMQ; 503 if any dependency fails.
+
+    Postgres is checked via a manual session (not DbSessionDep) so that a
+    DB outage produces a structured 503 with per-service status rather
+    than a 500 from a failed dependency resolution.
+    """
     services: list[ServiceHealth] = []
     all_ok = True
 
-    redis_client = cast(Redis[str], request.app.state.redis)
     try:
         pong = await redis_client.ping()
         if pong is not True:
@@ -47,7 +55,6 @@ async def health(request: Request, response: Response) -> HealthResponse:
         services.append(ServiceHealth(name="postgres", status="error", detail=detail))
         log.warning("health_postgres_failed", error=detail)
 
-    rabbit = cast(AbstractRobustConnection, request.app.state.rabbit)
     try:
         if rabbit.is_closed:
             raise RuntimeError("connection is closed")

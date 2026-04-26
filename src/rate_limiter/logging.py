@@ -19,9 +19,7 @@ def configure_logging(*, log_level: str, json_logs: bool) -> None:
     """
     level = getattr(logging, log_level)
 
-    timestamper: Processor = structlog.processors.TimeStamper(
-        fmt="iso", utc=True, key="timestamp"
-    )
+    timestamper: Processor = structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp")
 
     shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
