@@ -19,10 +19,10 @@ from typing import Annotated, cast
 
 from aio_pika.abc import AbstractRobustConnection
 from fastapi import Depends, Request
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rate_limiter.config import Settings, get_settings
+from rate_limiter.db.connection import RedisClient
 
 
 async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
@@ -38,15 +38,15 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-def get_redis(request: Request) -> Redis[str]:
-    return cast(Redis[str], request.app.state.redis)
+def get_redis(request: Request) -> RedisClient:
+    return cast(RedisClient, request.app.state.redis)
 
 
 def get_rabbit_connection(request: Request) -> AbstractRobustConnection:
     return cast(AbstractRobustConnection, request.app.state.rabbit)
 
 
-RedisDep = Annotated[Redis[str], Depends(get_redis)]
+RedisDep = Annotated[RedisClient, Depends(get_redis)]
 DbSessionDep = Annotated[AsyncSession, Depends(get_db)]
 RabbitDep = Annotated[AbstractRobustConnection, Depends(get_rabbit_connection)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
