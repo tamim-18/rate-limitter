@@ -16,6 +16,8 @@ services:
       ]
     volumes:
       - ./src:/app/src
+      - ./migrations:/app/migrations
+      - ./alembic.ini:/app/alembic.ini
     environment:
       PYTHONPATH: /app/src
       LOG_LEVEL: DEBUG
