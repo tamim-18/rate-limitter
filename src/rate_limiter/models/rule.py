@@ -26,7 +26,12 @@ class Algorithm(enum.StrEnum):
 class RateLimitRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "rate_limit_rules"
     __table_args__ = (
-        UniqueConstraint("tier", "endpoint", name="uq_rate_limit_rules_tier_endpoint"),
+        UniqueConstraint(
+            "tier",
+            "endpoint",
+            name="uq_rate_limit_rules_tier_endpoint",
+            postgresql_nulls_not_distinct=True,
+        ),
         CheckConstraint("max_requests > 0", name="max_requests_positive"),
         CheckConstraint("window_seconds > 0", name="window_seconds_positive"),
     )
